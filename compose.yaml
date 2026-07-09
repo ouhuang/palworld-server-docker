@@ -1,7 +1,7 @@
 ---
 services:
   palworld:
-    image: crpi-5iuh3e1kl6fp7sjz-vpc.cn-beijing.personal.cr.aliyuncs.com/madnpc/thijsvanloef/palworld-server-docker:latest
+    image: crpi-5iuh3e1kl6fp7sjz.cn-beijing.personal.cr.aliyuncs.com/madnpc/palworld-server-docker:latest
     container_name: palworld-server
     restart: unless-stopped
     stop_grace_period: 30s  # Set to however long you are willing to wait for the container to gracefully stop

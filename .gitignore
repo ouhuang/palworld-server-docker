@@ -4,3 +4,5 @@ palworld
 values*.yaml
 .env
 .vscode
+.codegraph
+.DS_Store

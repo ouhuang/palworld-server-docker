@@ -1,0 +1,110 @@
+---
+name: Sync image to ACR
+
+on:  # yamllint disable-line rule:truthy
+  workflow_dispatch:
+  schedule:
+    - cron: "0 20 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-acr-image
+  cancel-in-progress: false
+
+env:
+  SOURCE_IMAGE: ghcr.io/thijsvanloef/palworld-server-docker:latest
+  TARGET_IMAGE_NAME: palworld-server-docker
+
+jobs:
+  sync:
+    name: Sync upstream image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Check required secrets
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          missing=0
+
+          for name in ACR_REGISTRY ACR_NAMESPACE ACR_USERNAME ACR_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: ${name}"
+              missing=1
+            fi
+          done
+
+          exit "${missing}"
+
+      - name: Compare image digests
+        id: compare
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          target_image="${ACR_REGISTRY}/${ACR_NAMESPACE}/${TARGET_IMAGE_NAME}:latest"
+
+          source_digest="$(skopeo inspect \
+            --format '{{.Digest}}' \
+            "docker://${SOURCE_IMAGE}")"
+
+          if target_digest="$(skopeo inspect \
+            --creds "${ACR_USERNAME}:${ACR_PASSWORD}" \
+            --format '{{.Digest}}' \
+            "docker://${target_image}" 2>/dev/null)"; then
+            echo "Target image exists."
+          else
+            target_digest=""
+            echo "Target image does not exist yet."
+          fi
+
+          if [ "${source_digest}" = "${target_digest}" ]; then
+            echo "sync_required=false" >> "${GITHUB_OUTPUT}"
+            echo "Source and target already match: ${source_digest}"
+          else
+            echo "sync_required=true" >> "${GITHUB_OUTPUT}"
+            echo "Source digest: ${source_digest}"
+            echo "Target digest: ${target_digest:-missing}"
+          fi
+
+      - name: Sync image
+        if: steps.compare.outputs.sync_required == 'true'
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          target_image="${ACR_REGISTRY}/${ACR_NAMESPACE}/${TARGET_IMAGE_NAME}:latest"
+
+          skopeo copy \
+            --all \
+            --retry-times 3 \
+            --dest-creds "${ACR_USERNAME}:${ACR_PASSWORD}" \
+            "docker://${SOURCE_IMAGE}" \
+            "docker://${target_image}"
+
+      - name: Write summary
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+        run: |
+          target_image="${ACR_REGISTRY}/${ACR_NAMESPACE}/${TARGET_IMAGE_NAME}:latest"
+
+          {
+            echo "### Image sync"
+            echo "- Source: \`${SOURCE_IMAGE}\`"
+            echo "- Target: \`${target_image}\`"
+            echo "- Synced: \`${{ steps.compare.outputs.sync_required }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
